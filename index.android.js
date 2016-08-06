@@ -11,7 +11,8 @@ import {
   Text,
   View,
   ToastAndroid,
-  DeviceEventEmitter
+  DeviceEventEmitter,
+  ScrollView
 } from 'react-native';
 
 import BlueSerialNativeModule from './BlueSerialNativeModule';
@@ -20,12 +21,25 @@ import Button from './components/button.js';
 class BlueSerial extends Component {
   constructor(props){
     super(props);
-    this.state = {text: ''};
+    this.state = {
+      text: '',
+      scanResults: [],
+    };
   }
 
   componentWillMount(){
-    DeviceEventEmitter.addListener('deviceFind', function(e) {
+    that = this;
+
+    DeviceEventEmitter.addListener('deviceFind', function(e) {      
       console.log(e);
+      var list = that.state.scanResults;
+      list.push(e);
+      that.setState({scanResults: list});      
+    });
+
+    DeviceEventEmitter.addListener('deviceFindFinished', function(e) {      
+      console.log(e);
+      ToastAndroid.show(e.msg, ToastAndroid.SHORT);
     });
   }
 
@@ -38,11 +52,13 @@ class BlueSerial extends Component {
 
     } catch (e){
       console.log(e);
+      this.setState({text: e.message});
     }
   }
 
   async onPressStartDiscovery(){
     try {
+      this.setState({scanResults:[]});
       var ret = await BlueSerialNativeModule.startDiscovery();
       ToastAndroid.show(ret, ToastAndroid.SHORT);
       console.log(ret);
@@ -50,6 +66,18 @@ class BlueSerial extends Component {
       console.error(e);
     }
     
+  }
+
+  async _onListItemPress(e){
+    console.log(e.devAddr);
+    try {
+      var ret = await BlueSerialNativeModule.connect(e.devAddr);
+      ToastAndroid.show(ret, ToastAndroid.SHORT);
+      console.log(ret);
+    } catch(err) {
+      ToastAndroid.show(err.message, ToastAndroid.SHORT);
+      console.error(err);
+    }
   }
 
   render() {
@@ -63,6 +91,12 @@ class BlueSerial extends Component {
         </Text>
         <Button onPress={this.onPressTestButton.bind(this)}>Test</Button>
         <Button onPress={this.onPressStartDiscovery.bind(this)}>Scan</Button>
+
+        <ScrollView>
+          {this.state.scanResults.map((e, i)=><Button onPress={this._onListItemPress.bind(this, e)} key={i}>{e.devName + ": "+e.devAddr}</Button>)}
+        </ScrollView>
+
+
       </View>
     );
   }

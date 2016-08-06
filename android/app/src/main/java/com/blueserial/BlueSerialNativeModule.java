@@ -3,6 +3,7 @@ package com.blueserial;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -24,9 +25,13 @@ import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.facebook.react.uimanager.ViewManager;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 import javax.annotation.Nullable;
 
@@ -39,7 +44,11 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
     private final static int REQUEST_ENABLE_BT = 1;
     private final static String ERR_CODE = "1";
     private Promise mStartDiscoveryPromise;
+    private Promise mConnectPromise;
     private String TAG = "BluetoothService: ";
+    private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");    //UUID for SPP service
+    private StreamThread mStreamThread;
+    private ConnectThread mConnectThread;
 
     public BlueSerialNativeModule(ReactApplicationContext reactContext){
         super(reactContext);
@@ -85,8 +94,8 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
                 Log.d(TAG, "discovery finished");
                 //TBD
                 WritableMap params = Arguments.createMap();
-                params.putString("devName","discovery finished");
-                sendEvent(mReactContext, "deviceFind", params);
+                params.putString("msg","Discovery finished");
+                sendEvent(mReactContext, "deviceFindFinished", params);
             } else if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 switch (state) {
@@ -140,7 +149,7 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
             currentActivity.startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
         } else{
             mBluetoothAdapter.startDiscovery();
-            promise.resolve("Bluetooth is enabled. Now start discovery");
+            promise.resolve("Bluetooth has been enabled. Now start discovery");
         }
     }
 
@@ -165,8 +174,9 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
 
     @Override
     public void onHostDestroy(){
-        Log.d(TAG, "Native module's onHostDestroy occur.");
+        Log.e(TAG, "Native module's onHostDestroy occur.");
         mReactContext.unregisterReceiver(mReceiver);
+        stopBtService();
     }
 
     @Override
@@ -177,6 +187,165 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
     @Override
     public void onHostPause(){
         Log.d(TAG, "Native module's onHostPause occur.");
+    }
+
+    @ReactMethod
+    public void connect(String macAddr, Promise promise){
+        BluetoothDevice device;
+
+        mConnectPromise = promise;
+
+        mBluetoothAdapter.cancelDiscovery();
+        device = mBluetoothAdapter.getRemoteDevice(macAddr);
+
+        mConnectThread = new ConnectThread(device);
+        mConnectThread.start();
+    }
+
+    private synchronized void startStream(BluetoothSocket socket) {
+        // Start the thread to manage the connection and perform transmissions
+        mStreamThread = new StreamThread(socket);
+        mStreamThread .start();
+    }
+
+    private synchronized void stopBtService() {
+        Log.d(TAG, "now stop bt service");
+        if (mConnectThread != null) {
+            mConnectThread.cancel();
+            mConnectThread = null;
+        }
+
+        if (mStreamThread != null){
+            mStreamThread.cancel();
+            mStreamThread = null;
+        }
+    }
+
+    private class ConnectThread extends Thread {
+        private final BluetoothSocket mmSocket;
+        private final BluetoothDevice mmDevice;
+        public ConnectThread(BluetoothDevice device) {
+            // Use a temporary object that is later assigned to mmSocket,
+            // because mmSocket is final
+            BluetoothSocket tmp = null;
+            mmDevice = device;
+            // Get a BluetoothSocket to connect with the given BluetoothDevice
+            try {
+                // MY_UUID is the app's UUID string, also used by the server code
+                tmp = device.createRfcommSocketToServiceRecord(SPP_UUID);
+            } catch (IOException e) {
+                mConnectPromise.reject(ERR_CODE, e.getMessage());
+            }
+            mmSocket = tmp;
+        }
+        public void run() {
+            // Cancel discovery because it will slow down the connection
+            mBluetoothAdapter.cancelDiscovery();
+            try {
+                // Connect the device through the socket. This will block
+                // until it succeeds or throws an exception
+                //showToast("try to connect");
+                Log.d(TAG, "run: mmSocket.connect");
+                mmSocket.connect();
+            } catch (IOException connectException) {
+                // Unable to connect; close the socket and get out
+                try {
+                    mmSocket.close();
+                } catch (IOException closeException) { }
+
+                mConnectPromise.reject(ERR_CODE, connectException.getMessage());
+                return;
+            }
+            // Do work to manage the connection (in a separate thread)
+            Log.d(TAG, "connected to: " + mmDevice.getName());
+            Log.d(TAG, "now try to create stream.");
+            startStream(mmSocket);
+        }
+        // Will cancel an in-progress connection, and close the socket
+        public void cancel() {
+            Log.d(TAG, "ConnectThread, start cancel");
+            try {
+                mmSocket.close();
+            } catch (IOException e) { }
+        }
+    }
+
+    private class StreamThread extends Thread {
+        private final BluetoothSocket mmSocket;
+        private final InputStream mmInStream;
+        private final OutputStream mmOutStream;
+
+        public StreamThread(BluetoothSocket socket) {
+            mmSocket = socket;
+            InputStream tmpIn = null;
+            OutputStream tmpOut = null;
+
+            // Get the input and output streams, using temp objects because
+            // member streams are final
+            try {
+                tmpIn = socket.getInputStream();
+                tmpOut = socket.getOutputStream();
+            } catch (IOException e) {
+                Log.e(TAG, "Temp sockets not created", e);
+                mConnectPromise.reject(ERR_CODE, e.getMessage());
+            }
+
+            mmInStream = tmpIn;
+            mmOutStream = tmpOut;
+        }
+
+        public void run() {
+            mConnectPromise.resolve("Begin steamThread.");
+            Log.d(TAG, "Begin steamThread");
+            byte[] buffer = new byte[1024];  // buffer store for the stream
+            int bytes; // bytes returned from read()
+            int i;
+
+            StringBuffer  readMessage = new StringBuffer();
+
+            // Keep listening to the InputStream until an exception occurs
+            while (true) {
+                try {
+
+                    bytes = mmInStream.read(buffer);
+                    String read = new String(buffer, 0, bytes);
+                    //Log.d(TAG, "len: "+bytes+" string: "+read);
+                    for (i=0; i<bytes; i++) {
+                        Log.d(TAG, String.format("%x", buffer[i]));
+                    }
+
+                    readMessage.append(read);
+                    if (read.contains("\n")) {
+                        Log.d(TAG, readMessage.toString());
+                        readMessage.setLength(0);
+                    }
+
+                } catch (IOException e) {
+                    Log.e(TAG, "Connection Lost", e);
+                    break;
+                }
+            }
+        }
+
+        // Call this from the main activity to send data to the remote device
+        public void write(byte[] bytes) {
+            try {
+                mmOutStream.write(bytes);
+
+            } catch (IOException e) {
+                Log.e(TAG, "Exception during write", e);
+            }
+        }
+
+        // Call this from the main activity to shutdown the connection
+        // Will cancel an in-progress connection, and close the socket
+        public void cancel() {
+            Log.d(TAG, "StreamThread, start cancel");
+            try {
+                mmSocket.close();
+            } catch (IOException e) {
+                Log.e(TAG, "close() of connect socket failed", e);}
+        }
     }
 
 }
