@@ -9,7 +9,7 @@
 * isBluetoothEnabled(Promise promise)
   - promise.resolve: true/false
 
-* startDiscovery(Promise promise
+* startDiscovery(Promise promise)
   - promise.resolve("Bluetooth has been enabled. Now start discovery");
   - promise.resolve("Bluetooth enabled successfully");
   - promise.reject(ERR_CODE, "Bluetooth enable fail");
