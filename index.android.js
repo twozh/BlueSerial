@@ -9,6 +9,7 @@ import {
   AppRegistry,
   StyleSheet,
   Text,
+  TextInput,
   View,
   ToastAndroid,
   DeviceEventEmitter,
@@ -23,6 +24,8 @@ class BlueSerial extends Component {
     super(props);
     this.state = {
       text: '',
+      inputText: '',
+      recvMsg: '',
       scanResults: [],
     };
   }
@@ -30,16 +33,21 @@ class BlueSerial extends Component {
   componentWillMount(){
     that = this;
 
-    DeviceEventEmitter.addListener('deviceFind', function(e) {      
+    DeviceEventEmitter.addListener('find', function(e) {      
       console.log(e);
       var list = that.state.scanResults;
       list.push(e);
       that.setState({scanResults: list});      
     });
 
-    DeviceEventEmitter.addListener('deviceFindFinished', function(e) {      
+    DeviceEventEmitter.addListener('findFinished', function(e) {      
       console.log(e);
       ToastAndroid.show(e.msg, ToastAndroid.SHORT);
+    });
+
+    DeviceEventEmitter.addListener('recv', function(e) {      
+      console.log(e);
+      that.setState({recvMsg: e.msg}); 
     });
   }
 
@@ -64,9 +72,13 @@ class BlueSerial extends Component {
       console.log(ret);
     } catch(e){
       console.error(e);
-    }
-    
+    }    
   }
+
+  onPressSendMsg(){
+    BlueSerialNativeModule.send(this.state.inputText);
+  }
+
 
   async _onListItemPress(e){
     console.log(e.devAddr);
@@ -95,7 +107,14 @@ class BlueSerial extends Component {
         <ScrollView>
           {this.state.scanResults.map((e, i)=><Button onPress={this._onListItemPress.bind(this, e)} key={i}>{e.devName + ": "+e.devAddr}</Button>)}
         </ScrollView>
-
+        <TextInput style={styles.textInput}
+          onChangeText={(text) => this.setState({inputText:text})}
+          value={this.state.inputText}
+        />
+        <Text style={styles.instructions}>
+          {this.state.recvMsg}
+        </Text>
+        <Button onPress={this.onPressSendMsg.bind(this)}>Send</Button>
 
       </View>
     );
@@ -118,6 +137,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#333333',
     marginBottom: 5,
+  },
+  textInput: {
+    height: 40, 
+    borderColor: 'gray', 
+    borderWidth: 1,
+    marginTop: 20,
+    marginBottom: 60,
   },
 });
 

@@ -45,7 +45,7 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
     private final static String ERR_CODE = "1";
     private Promise mStartDiscoveryPromise;
     private Promise mConnectPromise;
-    private String TAG = "BluetoothService: ";
+    private String TAG = "BlueSerialNativeModule: ";
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");    //UUID for SPP service
     private StreamThread mStreamThread;
     private ConnectThread mConnectThread;
@@ -57,6 +57,8 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
 
         // Add the listener for `onActivityResult`
         reactContext.addActivityEventListener(this);
+        // Add the listener for `LifecycleEvent`
+        reactContext.addLifecycleEventListener(this);
 
         // Register the BroadcastReceiver
         IntentFilter filter = new IntentFilter();
@@ -82,20 +84,20 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
             if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                 // Get the BluetoothDevice object from the Intent
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                Log.d(TAG, "device find. name "+device.getName());
+                Log.d(TAG, "device find, name: "+device.getName());
 
                 // send device.getName() and device.getAddress() to javascript
                 WritableMap params = Arguments.createMap();
                 params.putString("devName",device.getName());
                 params.putString("devAddr",device.getAddress());
-                sendEvent(mReactContext, "deviceFind", params);
+                sendEvent(mReactContext, "find", params);
             }
             else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
                 Log.d(TAG, "discovery finished");
-                //TBD
+
                 WritableMap params = Arguments.createMap();
                 params.putString("msg","Discovery finished");
-                sendEvent(mReactContext, "deviceFindFinished", params);
+                sendEvent(mReactContext, "findFinished", params);
             } else if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 switch (state) {
@@ -113,26 +115,26 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
     }
 
     @ReactMethod
-    public boolean isBluetoothSupported() {
-        if (null != mBluetoothAdapter){
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    @ReactMethod
-    public void isBluetoothEnable(Promise promise){
-        promise.resolve(mBluetoothAdapter.isEnabled());
-    }
-
-    @ReactMethod
     public void testMethod(boolean ok, Promise promise){
         if (ok){
             promise.resolve("Hello BlueSerial!");
         } else{
             promise.reject(ERR_CODE, "call testMethod: return error");
         }
+    }
+
+    @ReactMethod
+    public void isBluetoothSupported(Promise promise) {
+        if (null != mBluetoothAdapter){
+            promise.resolve(true);
+        } else {
+            promise.resolve(false);
+        }
+    }
+
+    @ReactMethod
+    public void isBluetoothEnabled(Promise promise){
+        promise.resolve(mBluetoothAdapter.isEnabled());
     }
 
     @ReactMethod
@@ -149,6 +151,7 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
             currentActivity.startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
         } else{
             mBluetoothAdapter.startDiscovery();
+            Log.d(TAG, "start discovery");
             promise.resolve("Bluetooth has been enabled. Now start discovery");
         }
     }
@@ -174,7 +177,7 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
 
     @Override
     public void onHostDestroy(){
-        Log.e(TAG, "Native module's onHostDestroy occur.");
+        Log.d(TAG, "Native module's onHostDestroy occur.");
         mReactContext.unregisterReceiver(mReceiver);
         stopBtService();
     }
@@ -202,22 +205,28 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
         mConnectThread.start();
     }
 
+    @ReactMethod
+    public void send(String msg){
+        if (mStreamThread != null){
+            mStreamThread.write(msg.getBytes());
+        }
+    }
+
     private synchronized void startStream(BluetoothSocket socket) {
         // Start the thread to manage the connection and perform transmissions
         mStreamThread = new StreamThread(socket);
-        mStreamThread .start();
+        mStreamThread.start();
     }
 
     private synchronized void stopBtService() {
         Log.d(TAG, "now stop bt service");
-        if (mConnectThread != null) {
-            mConnectThread.cancel();
-            mConnectThread = null;
-        }
-
         if (mStreamThread != null){
             mStreamThread.cancel();
             mStreamThread = null;
+        }
+        if (mConnectThread != null) {
+            mConnectThread.cancel();
+            mConnectThread = null;
         }
     }
 
@@ -257,13 +266,12 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
                 return;
             }
             // Do work to manage the connection (in a separate thread)
-            Log.d(TAG, "connected to: " + mmDevice.getName());
-            Log.d(TAG, "now try to create stream.");
+            Log.d(TAG, "connected to: " + mmDevice.getName() + ", now try to create stream");
             startStream(mmSocket);
         }
         // Will cancel an in-progress connection, and close the socket
         public void cancel() {
-            Log.d(TAG, "ConnectThread, start cancel");
+            Log.d(TAG, "ConnectThread, try cancel");
             try {
                 mmSocket.close();
             } catch (IOException e) { }
@@ -295,8 +303,8 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
         }
 
         public void run() {
-            mConnectPromise.resolve("Begin steamThread.");
-            Log.d(TAG, "Begin steamThread");
+            mConnectPromise.resolve("connect successfuly, stream thread has began");
+            Log.d(TAG, "connect successfuly, stream thread has began");
             byte[] buffer = new byte[1024];  // buffer store for the stream
             int bytes; // bytes returned from read()
             int i;
@@ -309,13 +317,14 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
 
                     bytes = mmInStream.read(buffer);
                     String read = new String(buffer, 0, bytes);
-                    //Log.d(TAG, "len: "+bytes+" string: "+read);
-                    for (i=0; i<bytes; i++) {
-                        Log.d(TAG, String.format("%x", buffer[i]));
-                    }
 
                     readMessage.append(read);
                     if (read.contains("\n")) {
+                        // send recvMsg event to javascript
+                        WritableMap params = Arguments.createMap();
+                        params.putString("msg",readMessage.toString());
+                        sendEvent(mReactContext, "recv", params);
+
                         Log.d(TAG, readMessage.toString());
                         readMessage.setLength(0);
                     }
@@ -340,7 +349,7 @@ public class BlueSerialNativeModule  extends ReactContextBaseJavaModule  impleme
         // Call this from the main activity to shutdown the connection
         // Will cancel an in-progress connection, and close the socket
         public void cancel() {
-            Log.d(TAG, "StreamThread, start cancel");
+            Log.d(TAG, "StreamThread, try cancel");
             try {
                 mmSocket.close();
             } catch (IOException e) {
