@@ -71,7 +71,7 @@ class BlueSerial extends Component {
       ToastAndroid.show(ret, ToastAndroid.SHORT);
       console.log(ret);
     } catch(e){
-      console.error(e);
+      console.log(e);
     }    
   }
 
@@ -88,7 +88,7 @@ class BlueSerial extends Component {
       console.log(ret);
     } catch(err) {
       ToastAndroid.show(err.message, ToastAndroid.SHORT);
-      console.error(err);
+      console.log(err);
     }
   }
 
